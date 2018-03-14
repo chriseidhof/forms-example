@@ -8,49 +8,7 @@
 
 import Foundation
 
-public protocol Element {
-    associatedtype Input
-    associatedtype Message
-    static func label(text: @escaping (Input) -> String) -> Self
-    static func button(title: @escaping (Input) -> String, enabled: @escaping (Input) -> Bool, onTap: Message) -> Self
-    static func `switch`(isOn: WritableKeyPath<Input, Bool>) -> Self
-
-    static func _textField(text: WritableKeyPath<Input, String>, isSecure: @escaping (Input) -> Bool, backgroundColor: @escaping (Input) -> UIColor) -> Self
-}
-
-extension Element {
-    public static func textField(text: WritableKeyPath<Input, String>, isSecure: @escaping (Input) -> Bool = { _ in false }, backgroundColor: @escaping (Input) -> UIColor = { _ in .white }) -> Self {
-        return ._textField(text: text, isSecure: isSecure, backgroundColor: backgroundColor)
-    }
-    
-    public static func button(title: @escaping (Input) -> String, onTap: Message) -> Self {
-        return .button(title: title, enabled: { _ in true }, onTap: onTap)
-    }
-
-}
-
-public struct RenderedElement<I, V> {
-    let view: V
-    let strongReferences: [Any]
-    let inputChanged: (I) -> ()
-    init(view: V, inputChanged: @escaping (I) -> (), strongReferences: [Any] = []) {
-        self.view = view
-        self.inputChanged = inputChanged
-        self.strongReferences = strongReferences
-    }
-}
-
-
-enum Change<Input, Message> {
-    case message(Message)
-    case stateChange((inout Input) -> ())
-}
-
-public struct Renderer<I, M> {
-    let render: (_ change: @escaping (Change<I, M>) -> (), _ align: NSTextAlignment) -> RenderedElement<I, UIView>
-}
-
-private final class TargetAction {
+public final class TargetAction {
     let callback: () -> ()
     init(_ callback: @escaping () -> ()) {
         self.callback = callback
@@ -61,95 +19,87 @@ private final class TargetAction {
     }
 }
 
-extension Renderer: Element {
-    public typealias Input = I
-    public typealias Message = M
-    
-    public static func label(text: @escaping (Input) -> String) -> Renderer<Input, Message> {
-        return Renderer { change, alignment in
-            let l = UILabel()
-            l.textAlignment = alignment
-            return RenderedElement(view: l, inputChanged: {
-                    l.text = text($0)
-            })
-        }
-    }
-    
-    public static func _textField(text: WritableKeyPath<Input, String>, isSecure: @escaping (Input) -> Bool, backgroundColor: @escaping (Input) -> UIColor) -> Renderer<Input, Message> {
-        return Renderer { change, alignment in
-            let t = UITextField()
-            t.textAlignment = alignment
-            let ta = TargetAction {
-                change(.stateChange { (s: inout Input) in
-                    s[keyPath: text] = t.text ?? ""
-                })
-            }
-            t.addTarget(ta, action: #selector(TargetAction.action(sender:)), for: .editingChanged)
-            return RenderedElement(view: t, inputChanged: { i in
-                if t.text != i[keyPath: text] {
-                    t.text = i[keyPath: text]
-                }
-                t.isSecureTextEntry = isSecure(i)
-                t.backgroundColor = backgroundColor(i)
-            }, strongReferences: [ta])
-        }
-    }
-    
-    public static func `switch`(isOn: WritableKeyPath<Input,  Bool>) -> Renderer<Input, Message> {
-        return Renderer { change, alignment in
-            let t = UISwitch()
-            let ta = TargetAction {
-                change(.stateChange { (s: inout Input) in
-                    s[keyPath: isOn] = t.isOn
-                    })
-            }
-            t.addTarget(ta, action: #selector(TargetAction.action(sender:)), for: .valueChanged)
-            return RenderedElement(view: t, inputChanged: { i in
-                if t.isOn != i[keyPath: isOn] {
-                    t.isOn = i[keyPath: isOn]
-                }
-            }, strongReferences: [ta])
-        }
-    }
-    
-    public static func button(title: @escaping (Input) -> String, enabled: @escaping (Input) -> Bool, onTap: Message) -> Renderer<Input, Message> {
-        return Renderer { change, alignment in
-            let ta = TargetAction {
-                change(.message(onTap))
-            }
+public struct RenderedFormElement<Input, View> {
+    let view: View
+    let strongReferences: [Any]
+    let updateForChangedInput: (Input) -> ()
+}
 
-            let b = UIButton(type: .custom)
-            b.addTarget(ta, action: #selector(TargetAction.action(sender:)), for: .touchUpInside)
-            b.backgroundColor = .lightGray
-            return RenderedElement(view: b, inputChanged: {
-                b.setTitle(title($0), for: .normal)
-                b.isEnabled = enabled($0)
-            }, strongReferences: [ta])
+public enum Either<A,B> {
+    case left(A)
+    case right(B)
+}
+
+public struct FormElement<Input, Output, View> {
+    public typealias Change = Either<Output, (inout Input) -> ()>
+    let render: (_ callback: @escaping (Change) -> ()) -> RenderedFormElement<Input, View>
+}
+
+extension FormElement where View == UIView {
+    public static func label(text: @escaping (Input) -> String) -> FormElement {
+        return FormElement { _ in
+            let result = UILabel()
+            return RenderedFormElement(view: result, strongReferences: []) {
+                result.text = text($0)
+            }
+        }
+    }
+    
+    public static func empty() -> FormElement {
+        return FormElement { _ in
+            let result = UIView()
+            return RenderedFormElement(view: result, strongReferences: []) { _ in () }
         }
     }
 }
 
-public func stackView<State, Message>(initial: State, renderers: [Renderer<State, Message>], message: @escaping (Message) -> ()) -> (stackView: UIStackView, strongReferences: [Any]) {
-    var updateForChangedState: () -> () = {}
-    var state = initial {
-        didSet {
-            updateForChangedState()
+extension UIControl {
+    public func addTarget(_ ta: TargetAction, for events: UIControlEvents) {
+        self.addTarget(ta, action: #selector(TargetAction.action(sender:)), for: events)
+    }
+}
+
+extension FormElement where View == UIView {
+    public static func button(title: @escaping (Input) -> String, isEnabled: @escaping (Input) -> Bool, onTap: Change) -> FormElement {
+        return FormElement { out in
+            let result = UIButton()
+            let ta = TargetAction { out(onTap) }
+            result.addTarget(ta, for: .touchUpInside)
+            return RenderedFormElement(view: result, strongReferences: [ta]) { input in
+                result.isEnabled = isEnabled(input)
+                result.setTitle(title(input), for: .normal)
+            }
         }
     }
-    let elements = renderers.map { (r: Renderer<State, Message>) -> RenderedElement<State, UIView> in
-        r.render( { change in
-            switch change {
-            case let .message(m):
-                message(m)
-            case let .stateChange(f):
-                f(&state)
+    
+    public static func `switch`(isOn: WritableKeyPath<Input, Bool>) -> FormElement {
+        return FormElement { out in
+            let result = UISwitch()
+            let ta = TargetAction { [unowned result] in out(Change.right { s in
+                s[keyPath: isOn] = result.isOn
+            }) }
+            result.addTarget(ta, for: .valueChanged)
+            return RenderedFormElement(view: result, strongReferences: [ta]) { input in
+                result.isOn = input[keyPath: isOn]
             }
-        }, .left)
+        }
     }
-    let refs = elements.map { $0.strongReferences }
-    updateForChangedState = { elements.forEach { $0.inputChanged(state) } }
-    updateForChangedState()
-    return (UIStackView(arrangedSubviews: elements.map { $0.view }), refs)
+    
+    public static func textField(text: WritableKeyPath<Input, String>, placeHolder: String? = nil, isSecure: @escaping (Input) -> Bool = { _ in false}, backgroundColor: @escaping (Input) -> UIColor = { _ in .clear }) -> FormElement {
+        return FormElement { out in
+            let result = UITextField()
+            result.placeholder = placeHolder
+            let ta = TargetAction { [unowned result] in out(Change.right { state in
+                state[keyPath: text] = result.text ?? ""
+            }) }
+            result.addTarget(ta, for: .editingChanged)
+            return RenderedFormElement(view: result, strongReferences: [ta]) { input in
+                result.text = input[keyPath: text]
+                result.isSecureTextEntry = isSecure(input)
+                result.backgroundColor = backgroundColor(input)
+            }
+        }
+    }
 }
 
 extension UIView {
@@ -161,7 +111,6 @@ extension UIView {
         set {
             guard let s = superview else { return }
             frame.origin.x = s.bounds.width - frame.width - (newValue ?? 0)
-            print(s.bounds.width, frame.width, (newValue ?? 0))
         }
     }
     
@@ -171,35 +120,83 @@ extension UIView {
     }
 }
 
-final class FormCell: UITableViewCell {
-    let formElement: UIView
-    
-    init(label: String, _ formElement: UIView) {
-        self.formElement = formElement
-        super.init(style: .value1, reuseIdentifier: nil)
-        textLabel?.text = label
-        contentView.addSubview(formElement)
+final public class FormCell: UITableViewCell {
+    public var formElement: UIView? {
+        didSet {
+            if let o = oldValue { o.removeFromSuperview() }
+            if let n = formElement {
+                n.translatesAutoresizingMaskIntoConstraints = false
+                contentView.addSubview(n)
+                contentView.addConstraints([
+                    n.centerYAnchor.constraint(equalTo: contentView.layoutMarginsGuide.centerYAnchor),
+                    n.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+                ])
+            }
+        }
     }
     
-    required init?(coder aDecoder: NSCoder) {
+    public var onHide: ((Bool) -> ())? = nil
+    
+    // override because I don't want to abuse isHidden
+    public var hide: Bool = false {
+        didSet {
+            guard hide != oldValue else { return }
+            onHide?(hide)
+        }
+    }
+    
+    init(style: UITableViewCellStyle) {
+        super.init(style: style, reuseIdentifier: nil)
+    }
+    
+    required public init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        formElement.frameRight = 20
-        formElement.centerVertically()
+}
+
+extension FormElement where View == FormCell {
+    public static func cell(style: UITableViewCellStyle = .value1, _ text: @escaping (Input) -> String, detailText: @escaping (Input) -> String = { _ in "" }, _ element: FormElement<Input, Output, UIView> = .empty(), backgroundColor: @escaping (Input) -> UIColor = { _ in .white }, hidden: @escaping (Input) -> Bool = { _ in false }) -> FormElement {
+        return FormElement { out in
+            let cell = FormCell(style: style)
+            let renderedElement = element.render(out)
+            renderedElement.view.frame.size = CGSize(width: 200, height: 30) // todo
+            cell.formElement = renderedElement.view
+            return RenderedFormElement(view: cell, strongReferences: [], updateForChangedInput: { input in
+                cell.textLabel?.text = text(input)
+                cell.backgroundColor = backgroundColor(input)
+                cell.detailTextLabel?.text = detailText(input)
+                renderedElement.updateForChangedInput(input)
+                cell.hide = hidden(input)
+            })
+        }
     }
 }
 
 final class StaticTableViewConfig: NSObject, UITableViewDataSource {
-    var cells: [UITableViewCell]
-    let tableView: UITableView
-    init(tableView: UITableView, cells: [UITableViewCell]) {
-        self.tableView = tableView
-        self.cells = cells
+    private var observers: [Any] = []
+    var cells: [FormCell] {
+        didSet {
+            addObservers()
+        }
     }
-
+    let tableView: UITableView
+    init(tableView: UITableView, cells: [FormCell]) {
+        self.tableView = tableView
+        self.tableView.estimatedRowHeight = 55
+        self.tableView.rowHeight = UITableViewAutomaticDimension
+        self.cells = cells
+        super.init()
+        addObservers()
+    }
+    
+    func addObservers() {
+        for (i, cell) in cells.enumerated() {
+            cell.onHide = {
+                print("hide at \(i, $0)")
+            }
+        }
+    }
+    
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return cells.count
     }
@@ -209,31 +206,7 @@ final class StaticTableViewConfig: NSObject, UITableViewDataSource {
     }
 }
 
-public struct Cell<State, Message> {
-    let text: (State) -> String
-    let backgroundColor: (State) -> UIColor
-    let element: Renderer<State, Message>
-    public init(_ text: @escaping (State) -> String, _ element: Renderer<State, Message>, backgroundColor: @escaping (State) -> UIColor = { _ in .white }) {
-        self.text = text
-        self.element = element
-        self.backgroundColor = backgroundColor
-    }
-}
-
-extension Cell {
-    func render(_ change: @escaping (Change<State, Message>) -> ()) -> RenderedElement<State, UITableViewCell> {
-        let re = element.render(change, .right)
-        re.view.frame.size = CGSize(width: 200, height: 30) // todo
-        let cell = FormCell(label: "one", re.view)
-        return RenderedElement<State, UITableViewCell>(view: cell, inputChanged: { newInput in
-            cell.textLabel?.text = self.text(newInput)
-            cell.backgroundColor = self.backgroundColor(newInput)
-            re.inputChanged(newInput)
-        }, strongReferences: re.strongReferences)
-    }
-}
-
-public func tableView<State, Message>(initial: State, cells: [Cell<State, Message>], message: @escaping (Message) -> ()) -> (tableView: UITableView, strongReferences: [Any]) {
+public func tableView<Input, Output>(initial: Input, cells: [FormElement<Input,Output,FormCell>], onEvent: @escaping (inout Input, Output) -> ()) -> (tableView: UITableView, strongReferences: [Any]) {
     var updateForChangedState: () -> () = {}
     var state = initial {
         didSet {
@@ -241,18 +214,16 @@ public func tableView<State, Message>(initial: State, cells: [Cell<State, Messag
             print(state)
         }
     }
-    let elements = cells.map { (c: Cell<State, Message>) -> RenderedElement<State, UITableViewCell> in
-        return c.render( { change in
-            switch change {
-            case let .message(m):
-                message(m)
-            case let .stateChange(f):
-                f(&state)
-            }
-        })
-    }
+    let elements = cells.map { $0.render { out in
+        switch out {
+        case .left(let o):
+            onEvent(&state, o)
+        case .right(let f):
+            f(&state)
+        }
+    } }
     var refs = elements.map { $0.strongReferences }
-    updateForChangedState = { elements.forEach { $0.inputChanged(state) } }
+    updateForChangedState = { elements.forEach { $0.updateForChangedInput(state) } }
     updateForChangedState()
     let result = UITableView(frame: .zero, style: .grouped)
     let manager = StaticTableViewConfig(tableView: result, cells: elements.map { el in

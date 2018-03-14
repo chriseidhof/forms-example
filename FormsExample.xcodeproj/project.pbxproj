@@ -16,6 +16,7 @@
 		8332FE1F2048290300254340 /* Forms.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8332FE182048290300254340 /* Forms.framework */; };
 		8332FE202048290300254340 /* Forms.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8332FE182048290300254340 /* Forms.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		8332FE262048292500254340 /* Forms.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8332FE252048292500254340 /* Forms.swift */; };
+		83B3DBC02059042F0039644F /* FormsAlt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83B3DBBF2059042F0039644F /* FormsAlt.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -54,6 +55,7 @@
 		8332FE1A2048290300254340 /* Forms.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Forms.h; sourceTree = "<group>"; };
 		8332FE1B2048290300254340 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8332FE252048292500254340 /* Forms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Forms.swift; sourceTree = "<group>"; };
+		83B3DBBF2059042F0039644F /* FormsAlt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormsAlt.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -112,6 +114,7 @@
 				8332FE1A2048290300254340 /* Forms.h */,
 				8332FE1B2048290300254340 /* Info.plist */,
 				8332FE252048292500254340 /* Forms.swift */,
+				83B3DBBF2059042F0039644F /* FormsAlt.swift */,
 			);
 			path = Forms;
 			sourceTree = "<group>";
@@ -242,6 +245,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8332FE262048292500254340 /* Forms.swift in Sources */,
+				83B3DBC02059042F0039644F /* FormsAlt.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

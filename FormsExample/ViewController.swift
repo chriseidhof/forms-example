@@ -26,21 +26,13 @@ struct State {
     }
 }
 
-func form<E: Element>() -> [E] where E.Input == State, E.Message == State.Message {
+func tableForm() -> [FormElement<State,State.Message, FormCell>] {
     return [
-        .label { _ in "Name" },
-        .textField(text: \.name, backgroundColor: { $0.validName ? .white : .red }),
-        .label { _ in "Password" },
-        .textField(text: \.password, isSecure: { _ in true }, backgroundColor: { $0.validPassword ? .white : .red }),
-        .button(title: { _ in "Submit" }, enabled: { $0.valid }, onTap: State.Message.submit)
-    ]
-}
-
-func tableForm() -> [Cell<State,State.Message>] {
-    return [
-    Cell({ _ in "Name" }, .textField(text: \.name, backgroundColor: { $0.validName ? .white : .red })),
-    Cell({ _ in "Password" }, .textField(text: \.password, isSecure: { _ in true }, backgroundColor: { $0.validPassword ? .white : .red }), backgroundColor: { $0.validPassword ? .white : .red }),
-    Cell({ _ in "Spam" }, .switch(isOn: \.other))
+    .cell({ _ in "Name" }, .textField(text: \State.name, placeHolder: "Your Name")),
+    .cell({ _ in "Test"}, detailText: { _ in "Detail" }),
+    .cell({ _ in "Password" }, .textField(text: \.password, placeHolder: "Your Password", isSecure: { _ in true }), backgroundColor: { $0.validPassword ? .white : .red }),
+    .cell({ _ in "Spam" }, .switch(isOn: \.other), hidden: { $0.validName }),
+    .cell({ _ in "" }, .button(title: { _ in "Submit"}, isEnabled: { (s: State) in s.valid }, onTap: .left(State.Message.submit)))
     ]
 }
 
@@ -54,8 +46,9 @@ class ViewController: UIViewController {
     }
     
     func buildTableView() {
-        let (s, refs) = tableView(initial: State(), cells: tableForm(), message: {
-            print($0)
+        let (s, refs) = tableView(initial: State(), cells: tableForm(), onEvent: { (state, msg) in
+            print(msg)
+            print(state)
         })
         self.refs = refs
         
@@ -70,22 +63,6 @@ class ViewController: UIViewController {
             ])
     }
     
-    func buildStackView() {
-        let (s, refs) = stackView(initial: State(), renderers: form(), message: {
-            print($0)
-        })
-        self.refs = refs
-        
-        s.axis = .vertical
-        s.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(s)
-        let si = view.safeAreaLayoutGuide
-        view.addConstraints([
-            s.topAnchor.constraint(equalTo: si.topAnchor),
-            s.leftAnchor.constraint(equalTo: si.leftAnchor),
-            s.rightAnchor.constraint(equalTo: si.rightAnchor)
-            ])
-    }
 
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
