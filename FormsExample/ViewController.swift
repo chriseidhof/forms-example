@@ -14,6 +14,18 @@ struct State {
     var password: String = "The Password"
     var other: Bool = false
     
+    enum ShowPreview {
+        case always
+        case never
+        
+        var text: String {
+            switch self {
+            case .always: return "Always"
+            case .never: return "Never"
+            }
+        }
+    }
+    
     var valid: Bool {
         return !name.isEmpty && !password.isEmpty
     }
@@ -21,20 +33,36 @@ struct State {
     var validName: Bool { return !name.isEmpty }
     var validPassword: Bool { return !password.isEmpty }
     
+    var showPreviews: ShowPreview = .always
+    
     enum Message {
         case submit
     }
 }
 
-func tableForm() -> [FormElement<State,State.Message, FormCell>] {
-    return [
-    .cell({ _ in "Name" }, .textField(text: \State.name, placeHolder: "Your Name")),
-    .cell({ _ in "Test"}, detailText: { _ in "Detail" }),
-    .cell({ _ in "Password" }, .textField(text: \.password, placeHolder: "Your Password", isSecure: { _ in true }), backgroundColor: { $0.validPassword ? .white : .red }),
-    .cell({ _ in "Spam" }, .switch(isOn: \.other), hidden: { $0.validName }),
-    .cell({ _ in "" }, .button(title: { _ in "Submit"}, isEnabled: { (s: State) in s.valid }, onTap: .left(State.Message.submit)))
+func tableForm() -> [FormElement<State,State.Message, Section>] {
+    return [.section(title: "test", cells: [
+        .cell({ _ in "Name" }, .textField(text: \State.name, placeHolder: "Your Name")),
+        .cell({ _ in "Test"}, detailText: { _ in "Detail" }),
+        .cell({ _ in "Password" }, .textField(text: \.password, placeHolder: "Your Password", isSecure: { _ in true }), backgroundColor: { $0.validPassword ? .white : .red }),
+        .cell({ $0.other ? "I want spam" : "No spam" }, .switch(isOn: \.other), hidden: { $0.validName }),
+        .cell({ _ in "" }, .button(title: { _ in "Submit"}, isEnabled: { (s: State) in s.valid }, onTap: .left(State.Message.submit)))
+    ]),
+    .section(title: "notifications", cells: [
+        .cell({_ in "Show Previews" }, detailText: { $0.showPreviews.text }, accessory: { _ in .disclosureIndicator}, nested: nested)
+    ])
     ]
 }
+
+let nested: FormElement<State, State.Message, UITableViewController> = FormElement<State,State.Message, UITableViewController>.tableViewController(style: .grouped, form: FormElement.form(title: "Test", sections: [
+    .section(title: "",
+        cells: [
+            .cell({ _ in ""}, .textField(text: \State.name, placeHolder: "Your Name"))
+    ]
+    )
+    ]))
+
+
 
 class ViewController: UIViewController {
     var refs: [Any] = []
@@ -46,7 +74,10 @@ class ViewController: UIViewController {
     }
     
     func buildTableView() {
-        let (s, refs) = tableView(initial: State(), cells: tableForm(), onEvent: { (state, msg) in
+        let table = FormElement.tableView(style: .grouped, sections: tableForm())
+        let (s, refs) = driver(initial: State(), view: table, pushViewController: { [unowned self] in
+            self.navigationController?.pushViewController($0, animated: true)
+        }, onEvent: { (state, msg) in
             print(msg)
             print(state)
         })

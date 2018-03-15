@@ -30,9 +30,14 @@ public enum Either<A,B> {
     case right(B)
 }
 
+struct RenderingContext<Input, Output> {
+    let change: ((inout Input) -> ()) -> ()
+    let output: (Output) -> ()
+    let pushViewController: (UIViewController) -> ()
+}
 public struct FormElement<Input, Output, View> {
     public typealias Change = Either<Output, (inout Input) -> ()>
-    let render: (_ callback: @escaping (Change) -> ()) -> RenderedFormElement<Input, View>
+    let render: (_ context: RenderingContext<Input, Output>) -> RenderedFormElement<Input, View>
 }
 
 extension FormElement where View == UIView {
@@ -63,7 +68,10 @@ extension FormElement where View == UIView {
     public static func button(title: @escaping (Input) -> String, isEnabled: @escaping (Input) -> Bool, onTap: Change) -> FormElement {
         return FormElement { out in
             let result = UIButton()
-            let ta = TargetAction { out(onTap) }
+            let ta = TargetAction { switch onTap {
+            case .left(let x): out.output(x)
+            case .right(let x): out.change(x)
+                } }
             result.addTarget(ta, for: .touchUpInside)
             return RenderedFormElement(view: result, strongReferences: [ta]) { input in
                 result.isEnabled = isEnabled(input)
@@ -75,9 +83,9 @@ extension FormElement where View == UIView {
     public static func `switch`(isOn: WritableKeyPath<Input, Bool>) -> FormElement {
         return FormElement { out in
             let result = UISwitch()
-            let ta = TargetAction { [unowned result] in out(Change.right { s in
+            let ta = TargetAction { [unowned result] in out.change { s in
                 s[keyPath: isOn] = result.isOn
-            }) }
+            } }
             result.addTarget(ta, for: .valueChanged)
             return RenderedFormElement(view: result, strongReferences: [ta]) { input in
                 result.isOn = input[keyPath: isOn]
@@ -89,9 +97,9 @@ extension FormElement where View == UIView {
         return FormElement { out in
             let result = UITextField()
             result.placeholder = placeHolder
-            let ta = TargetAction { [unowned result] in out(Change.right { state in
+            let ta = TargetAction { [unowned result] in out.change { state in
                 state[keyPath: text] = result.text ?? ""
-            }) }
+            } }
             result.addTarget(ta, for: .editingChanged)
             return RenderedFormElement(view: result, strongReferences: [ta]) { input in
                 result.text = input[keyPath: text]
@@ -135,6 +143,8 @@ final public class FormCell: UITableViewCell {
         }
     }
     
+    public var nested: UIViewController? = nil
+    
     public var onHide: ((Bool) -> ())? = nil
     
     // override because I don't want to abuse isHidden
@@ -155,58 +165,172 @@ final public class FormCell: UITableViewCell {
 }
 
 extension FormElement where View == FormCell {
-    public static func cell(style: UITableViewCellStyle = .value1, _ text: @escaping (Input) -> String, detailText: @escaping (Input) -> String = { _ in "" }, _ element: FormElement<Input, Output, UIView> = .empty(), backgroundColor: @escaping (Input) -> UIColor = { _ in .white }, hidden: @escaping (Input) -> Bool = { _ in false }) -> FormElement {
+    public static func cell(style: UITableViewCellStyle = .value1, _ text: @escaping (Input) -> String, detailText: @escaping (Input) -> String = { _ in "" }, _ element: FormElement<Input, Output, UIView>? = nil, backgroundColor: @escaping (Input) -> UIColor = { _ in .white }, hidden: @escaping (Input) -> Bool = { _ in false }, accessory: @escaping (Input) -> UITableViewCellAccessoryType = { _ in .none }, nested: FormElement<Input, Output, UITableViewController>? = nil) -> FormElement {
         return FormElement { out in
             let cell = FormCell(style: style)
-            let renderedElement = element.render(out)
-            renderedElement.view.frame.size = CGSize(width: 200, height: 30) // todo
-            cell.formElement = renderedElement.view
-            return RenderedFormElement(view: cell, strongReferences: [], updateForChangedInput: { input in
+            let renderedElement = element?.render(out)
+            cell.formElement = renderedElement?.view
+            let nestedRendered = nested?.render(out)
+            cell.nested = nestedRendered?.view
+            let strongReferences = [renderedElement?.strongReferences, nestedRendered?.strongReferences].flatMap { $0 }
+            return RenderedFormElement(view: cell, strongReferences: strongReferences, updateForChangedInput: { input in
                 cell.textLabel?.text = text(input)
                 cell.backgroundColor = backgroundColor(input)
                 cell.detailTextLabel?.text = detailText(input)
-                renderedElement.updateForChangedInput(input)
+                cell.accessoryType = accessory(input)
                 cell.hide = hidden(input)
+                renderedElement?.updateForChangedInput(input)
+                nestedRendered?.updateForChangedInput(input)
             })
         }
     }
 }
 
-final class StaticTableViewConfig: NSObject, UITableViewDataSource {
+final class StaticTableViewConfig: NSObject, UITableViewDataSource, UITableViewDelegate {
     private var observers: [Any] = []
-    var cells: [FormCell] {
+    var sections: [Section] {
         didSet {
             addObservers()
         }
     }
+    let push: (UIViewController) -> ()
+    
     let tableView: UITableView
-    init(tableView: UITableView, cells: [FormCell]) {
+    init(tableView: UITableView, sections: [Section], push: @escaping (UIViewController) -> ()) {
         self.tableView = tableView
         self.tableView.estimatedRowHeight = 55
         self.tableView.rowHeight = UITableViewAutomaticDimension
-        self.cells = cells
+        self.sections = sections
+        self.push = push
         super.init()
         addObservers()
     }
     
     func addObservers() {
-        for (i, cell) in cells.enumerated() {
-            cell.onHide = {
-                print("hide at \(i, $0)")
+        for (i, section) in sections.enumerated() {
+            for (j, cell) in section.cells.enumerated() {
+                cell.onHide = { newValue in
+                    print("hide row \(i,j)")
+                }
             }
         }
     }
     
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return cells.count
+        return sections[section].cells.count
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        return cells[indexPath.row]
+        return sections[indexPath.section].cells[indexPath.row]
+    }
+    
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let cell = sections[indexPath.section].cells[indexPath.row]
+        if let n = cell.nested {
+            push(n)
+            tableView.deselectRow(at: indexPath, animated: false)
+        }
+    }
+    
+    func numberOfSections(in tableView: UITableView) -> Int {
+        return sections.count
+    }
+    
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        return sections[section].title
+    }
+    
+    
+}
+
+public struct Section {
+    var title: String?
+    var cells: [FormCell]
+}
+
+extension FormElement where View == Section {
+    public static func section(title: String?, cells: [FormElement<Input,Output,FormCell>]) -> FormElement {
+        return FormElement { out in
+            let rendered = cells.map { $0.render(out) }
+            return RenderedFormElement(view: Section(title: title, cells: rendered.map { $0.view }), strongReferences: rendered.flatMap { $0.strongReferences }, updateForChangedInput: { input in
+                for r in rendered {
+                    r.updateForChangedInput(input)
+                }
+            })
+        }
     }
 }
 
-public func tableView<Input, Output>(initial: Input, cells: [FormElement<Input,Output,FormCell>], onEvent: @escaping (inout Input, Output) -> ()) -> (tableView: UITableView, strongReferences: [Any]) {
+public struct Form {
+    public var title: String
+    public var sections: [Section]
+}
+
+final class FormViewController: UITableViewController {
+    var form: Form
+    var strongReferences: [Any] = []
+    var manager: StaticTableViewConfig!
+    
+    init(_ form: Form, style: UITableViewStyle, push: @escaping (UIViewController) -> ()) {
+        self.form = form
+        super.init(style: style)
+        manager = StaticTableViewConfig(tableView: tableView, sections: form.sections, push: push)
+        tableView.delegate = manager
+        tableView.dataSource = manager
+    }
+    
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+extension FormElement where View == Form {
+    // todo almost the same as Section
+    public static func form(title: String, sections: [FormElement<Input,Output,Section>]) -> FormElement {
+        return FormElement { out in
+            let rendered = sections.map { $0.render(out) }
+            return RenderedFormElement(view: Form(title: title, sections: rendered.map { $0.view }), strongReferences: rendered.flatMap { $0.strongReferences }, updateForChangedInput: { input in
+                for r in rendered {
+                    r.updateForChangedInput(input)
+                }
+            })
+
+        }
+    }
+}
+
+extension FormElement where View == UITableView {
+    static public func tableView(style: UITableViewStyle, sections: [FormElement<Input, Output, Section>]) -> FormElement {
+        // todo almost the same as section and form
+        return FormElement { out in
+            let tableView = UITableView(frame: .zero, style: style)
+            let rendered = sections.map { $0.render(out) }
+            let manager = StaticTableViewConfig(tableView: tableView, sections: rendered.map { $0.view }, push: out.pushViewController)
+            tableView.dataSource = manager
+            tableView.delegate = manager
+            return RenderedFormElement(view: tableView, strongReferences: rendered.flatMap { $0.strongReferences } + [manager], updateForChangedInput: { input in
+                for r in rendered {
+                    r.updateForChangedInput(input)
+                }
+            })
+            
+        }
+    }
+}
+
+extension FormElement where View == UITableViewController {
+    static public func tableViewController(style: UITableViewStyle, form: FormElement<Input,Output,Form>) -> FormElement {
+        return FormElement { out in
+            let rendered = form.render(out)
+            let vc = FormViewController(rendered.view, style: .grouped, push: out.pushViewController)
+            return RenderedFormElement(view: vc, strongReferences: rendered.strongReferences, updateForChangedInput: { input in
+                rendered.updateForChangedInput(input)
+            })
+        }
+    }
+}
+
+public func driver<Input, Output, View>(initial: Input, view: FormElement<Input,Output,View>, pushViewController: @escaping (UIViewController) -> (), onEvent: @escaping (inout Input, Output) -> ()) -> (result: View, strongReferences: [Any]) {
     var updateForChangedState: () -> () = {}
     var state = initial {
         didSet {
@@ -214,22 +338,13 @@ public func tableView<Input, Output>(initial: Input, cells: [FormElement<Input,O
             print(state)
         }
     }
-    let elements = cells.map { $0.render { out in
-        switch out {
-        case .left(let o):
-            onEvent(&state, o)
-        case .right(let f):
-            f(&state)
-        }
-    } }
-    var refs = elements.map { $0.strongReferences }
-    updateForChangedState = { elements.forEach { $0.updateForChangedInput(state) } }
+    let context = RenderingContext(change: { f in
+        f(&state)
+    }, output: { o in
+        onEvent(&state, o)
+    }, pushViewController: pushViewController)
+    let element = view.render(context)
+    updateForChangedState = { element.updateForChangedInput(state) }
     updateForChangedState()
-    let result = UITableView(frame: .zero, style: .grouped)
-    let manager = StaticTableViewConfig(tableView: result, cells: elements.map { el in
-        return el.view
-    })
-    result.dataSource = manager
-    refs.append([manager])
-    return (result, refs)
+    return (element.view, element.strongReferences)
 }
