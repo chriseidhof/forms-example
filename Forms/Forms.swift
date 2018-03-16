@@ -31,7 +31,7 @@ public enum Either<A,B> {
 }
 
 struct RenderingContext<Input, Output> {
-    let change: ((inout Input) -> ()) -> ()
+    let change: (@escaping (inout Input) -> ()) -> ()
     let output: (Output) -> ()
     let pushViewController: (UIViewController) -> ()
 }
@@ -64,6 +64,20 @@ extension UIControl {
     }
 }
 
+extension FormElement where View == UIView, Input == Bool {
+    public static func uiSwitch() -> FormElement {
+        return FormElement { out in
+            let result = UISwitch()
+            let ta = TargetAction { [unowned result] in out.change { s in
+                s = result.isOn
+                } }
+            result.addTarget(ta, for: .valueChanged)
+            return RenderedFormElement(view: result, strongReferences: [ta]) { input in
+                result.isOn = input
+            }
+        }
+    }
+}
 extension FormElement where View == UIView {
     public static func button(title: @escaping (Input) -> String, isEnabled: @escaping (Input) -> Bool, onTap: Change) -> FormElement {
         return FormElement { out in
@@ -76,19 +90,6 @@ extension FormElement where View == UIView {
             return RenderedFormElement(view: result, strongReferences: [ta]) { input in
                 result.isEnabled = isEnabled(input)
                 result.setTitle(title(input), for: .normal)
-            }
-        }
-    }
-    
-    public static func `switch`(isOn: WritableKeyPath<Input, Bool>) -> FormElement {
-        return FormElement { out in
-            let result = UISwitch()
-            let ta = TargetAction { [unowned result] in out.change { s in
-                s[keyPath: isOn] = result.isOn
-            } }
-            result.addTarget(ta, for: .valueChanged)
-            return RenderedFormElement(view: result, strongReferences: [ta]) { input in
-                result.isOn = input[keyPath: isOn]
             }
         }
     }
@@ -109,6 +110,22 @@ extension FormElement where View == UIView {
         }
     }
 }
+
+public func simpleTextField<Output>(placeHolder: String? = nil) -> FormElement<String,Output,UIView> {
+    return FormElement { out in
+        let result = UITextField()
+        result.placeholder = placeHolder
+        let ta = TargetAction { [unowned result] in out.change { state in
+            state = result.text ?? ""
+            } }
+        result.addTarget(ta, for: .editingChanged)
+        return RenderedFormElement(view: result, strongReferences: [ta]) { input in
+            result.text = input
+        }
+    }
+}
+
+
 
 extension UIView {
     var frameRight: CGFloat? {
@@ -146,6 +163,7 @@ final public class FormCell: UITableViewCell {
     public var nested: UIViewController? = nil
     
     public var onHide: ((Bool) -> ())? = nil
+    public var didSelect: (() -> ())? = nil
     
     // override because I don't want to abuse isHidden
     public var hide: Bool = false {
@@ -165,7 +183,7 @@ final public class FormCell: UITableViewCell {
 }
 
 extension FormElement where View == FormCell {
-    public static func cell(style: UITableViewCellStyle = .value1, _ text: @escaping (Input) -> String, detailText: @escaping (Input) -> String = { _ in "" }, _ element: FormElement<Input, Output, UIView>? = nil, backgroundColor: @escaping (Input) -> UIColor = { _ in .white }, hidden: @escaping (Input) -> Bool = { _ in false }, accessory: @escaping (Input) -> UITableViewCellAccessoryType = { _ in .none }, nested: FormElement<Input, Output, UITableViewController>? = nil) -> FormElement {
+    public static func cell(style: UITableViewCellStyle = .value1, _ text: @escaping (Input) -> String, detailText: @escaping (Input) -> String = { _ in "" }, _ element: FormElement<Input, Output, UIView>? = nil, backgroundColor: @escaping (Input) -> UIColor = { _ in .white }, hidden: @escaping (Input) -> Bool = { _ in false }, accessory: @escaping (Input) -> UITableViewCellAccessoryType = { _ in .none }, nested: FormElement<Input, Output, UITableViewController>? = nil, didSelect: ((inout Input) -> ())? = nil) -> FormElement {
         return FormElement { out in
             let cell = FormCell(style: style)
             let renderedElement = element?.render(out)
@@ -173,6 +191,9 @@ extension FormElement where View == FormCell {
             let nestedRendered = nested?.render(out)
             cell.nested = nestedRendered?.view
             let strongReferences = [renderedElement?.strongReferences, nestedRendered?.strongReferences].flatMap { $0 }
+            if let d = didSelect {
+                cell.didSelect = { out.change(d) }
+            }
             return RenderedFormElement(view: cell, strongReferences: strongReferences, updateForChangedInput: { input in
                 cell.textLabel?.text = text(input)
                 cell.backgroundColor = backgroundColor(input)
@@ -226,10 +247,13 @@ final class StaticTableViewConfig: NSObject, UITableViewDataSource, UITableViewD
     
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let cell = sections[indexPath.section].cells[indexPath.row]
+        if let s = cell.didSelect {
+            s()
+        }
         if let n = cell.nested {
             push(n)
-            tableView.deselectRow(at: indexPath, animated: false)
         }
+        tableView.deselectRow(at: indexPath, animated: true)
     }
     
     func numberOfSections(in tableView: UITableView) -> Int {
@@ -237,22 +261,27 @@ final class StaticTableViewConfig: NSObject, UITableViewDataSource, UITableViewD
     }
     
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        return sections[section].title
+        return sections[section].headerTitle
+    }
+    
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        return sections[section].footerTitle
     }
     
     
 }
 
 public struct Section {
-    var title: String?
+    var headerTitle: String?
+    var footerTitle: String?
     var cells: [FormCell]
 }
 
 extension FormElement where View == Section {
-    public static func section(title: String?, cells: [FormElement<Input,Output,FormCell>]) -> FormElement {
+    public static func section(headerTitle: String? = nil, footerTitle: String? = nil, cells: [FormElement<Input,Output,FormCell>]) -> FormElement {
         return FormElement { out in
             let rendered = cells.map { $0.render(out) }
-            return RenderedFormElement(view: Section(title: title, cells: rendered.map { $0.view }), strongReferences: rendered.flatMap { $0.strongReferences }, updateForChangedInput: { input in
+            return RenderedFormElement(view: Section(headerTitle: headerTitle, footerTitle: footerTitle, cells: rendered.map { $0.view }), strongReferences: rendered.flatMap { $0.strongReferences }, updateForChangedInput: { input in
                 for r in rendered {
                     r.updateForChangedInput(input)
                 }
@@ -323,12 +352,44 @@ extension FormElement where View == UITableViewController {
         return FormElement { out in
             let rendered = form.render(out)
             let vc = FormViewController(rendered.view, style: .grouped, push: out.pushViewController)
+            vc.navigationItem.title = rendered.view.title
             return RenderedFormElement(view: vc, strongReferences: rendered.strongReferences, updateForChangedInput: { input in
                 rendered.updateForChangedInput(input)
             })
         }
     }
 }
+
+extension RenderingContext {
+    func project<Child>(_ keyPath: WritableKeyPath<Input,Child>) -> RenderingContext<Child, Output> {
+        return RenderingContext<Child, Output>(change: { f in
+            self.change { value in
+                f(&value[keyPath: keyPath])
+            }
+        }, output: output, pushViewController: pushViewController)
+
+    }
+}
+
+extension FormElement {
+    public func bindTo<NewInput>(_ keyPath: WritableKeyPath<NewInput, Input>) -> FormElement<NewInput, Output, View> {
+        return FormElement<NewInput, Output, View> { out in
+            let result = self.render(out.project(keyPath))
+            return RenderedFormElement(view: result.view, strongReferences: result.strongReferences, updateForChangedInput: { inp in
+                result.updateForChangedInput(inp[keyPath: keyPath])
+            })
+        }
+    }
+}
+
+public func choice<A: Equatable, Message>(title: String, elements: [(A, String)]) -> FormElement<A, Message, Section> {
+    return .section(headerTitle: title, cells: elements.map { el in
+        FormElement.cell({ _ in el.1 }, accessory: { $0 == el.0 ? .checkmark : .none}, didSelect: {
+            $0 = el.0
+        })
+    })
+}
+
 
 public func driver<Input, Output, View>(initial: Input, view: FormElement<Input,Output,View>, pushViewController: @escaping (UIViewController) -> (), onEvent: @escaping (inout Input, Output) -> ()) -> (result: View, strongReferences: [Any]) {
     var updateForChangedState: () -> () = {}

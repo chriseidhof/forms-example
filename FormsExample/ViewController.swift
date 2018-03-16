@@ -13,15 +13,21 @@ struct State {
     var name: String = "Your Name"
     var password: String = "The Password"
     var other: Bool = false
+    var personalHotspot = false
+    var personalHotspotPassword: String = "hello"
     
     enum ShowPreview {
         case always
         case never
+        case sometimes
+        
+        static var all: [ShowPreview] = [.always, .never, .sometimes]
         
         var text: String {
             switch self {
             case .always: return "Always"
             case .never: return "Never"
+            case .sometimes: return "Sometimes"
             }
         }
     }
@@ -41,25 +47,43 @@ struct State {
 }
 
 func tableForm() -> [FormElement<State,State.Message, Section>] {
-    return [.section(title: "test", cells: [
+    return [.section(headerTitle: "test", cells: [
         .cell({ _ in "Name" }, .textField(text: \State.name, placeHolder: "Your Name")),
         .cell({ _ in "Test"}, detailText: { _ in "Detail" }),
-        .cell({ _ in "Password" }, .textField(text: \.password, placeHolder: "Your Password", isSecure: { _ in true }), backgroundColor: { $0.validPassword ? .white : .red }),
-        .cell({ $0.other ? "I want spam" : "No spam" }, .switch(isOn: \.other), hidden: { $0.validName }),
+        .cell({ _ in "Password" }, .textField(text: \State.password, placeHolder: "Your Password", isSecure: { _ in true }), backgroundColor: { $0.validPassword ? .white : .red }),
+        .cell({ $0.other ? "I want spam" : "No spam" }, FormElement<Bool, State.Message, UIView>.uiSwitch().bindTo(\State.other), hidden: { $0.validName }),
+        .cell({ _ in "Personal Hotspot" }, detailText: { $0.personalHotspot ? "On" : "Off" }, accessory: { _ in .disclosureIndicator }, nested: personalHotspotForm),
         .cell({ _ in "" }, .button(title: { _ in "Submit"}, isEnabled: { (s: State) in s.valid }, onTap: .left(State.Message.submit)))
     ]),
-    .section(title: "notifications", cells: [
+    .section(headerTitle: "notifications", cells: [
         .cell({_ in "Show Previews" }, detailText: { $0.showPreviews.text }, accessory: { _ in .disclosureIndicator}, nested: nested)
-    ])
+    ]),
     ]
 }
 
-let nested: FormElement<State, State.Message, UITableViewController> = FormElement<State,State.Message, UITableViewController>.tableViewController(style: .grouped, form: FormElement.form(title: "Test", sections: [
-    .section(title: "",
-        cells: [
-            .cell({ _ in ""}, .textField(text: \State.name, placeHolder: "Your Name"))
-    ]
+func nestedTextfield<Output>(title: String) -> FormElement<String, Output, FormCell> {
+    let nested = FormElement.tableViewController(style: .grouped, form: .form(title: title, sections: [
+        .section(cells: [
+            FormElement<String, Output, FormCell>.cell({ _ in ""}, simpleTextField(placeHolder: title))
+        ])
+    ]))
+    return FormElement.cell({ _ in title }, detailText: { $0 }, accessory: { _ in .disclosureIndicator }, nested: nested
     )
+}
+
+let personalHotspotForm: FormElement<State, State.Message, UITableViewController> = FormElement.tableViewController(style: .grouped, form: .form(title: "Test", sections: [
+    .section(headerTitle: "", cells: [
+        .cell({_ in "Personal Hotspot" }, FormElement<Bool, State.Message, UIView>.uiSwitch().bindTo(\State.personalHotspot)),
+    ]),
+    .section(headerTitle: "", footerTitle: "Other users will join the shared Wi-Fi network using the provided password.\n\nThis is a test.", cells: [
+        nestedTextfield(title: "Wi-Fi Password").bindTo(\State.personalHotspotPassword)
+    ])
+    ]))
+
+let nested: FormElement<State, State.Message, UITableViewController> = FormElement<State,State.Message, UITableViewController>.tableViewController(style: .grouped, form: FormElement.form(title: "Test", sections: [
+    choice(title: "Show Previews", elements: State.ShowPreview.all.map {
+        ($0, $0.text)
+    }).bindTo(\State.showPreviews)
     ]))
 
 
